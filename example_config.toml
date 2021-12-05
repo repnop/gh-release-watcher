@@ -1,0 +1,51 @@
+# Example `gh-release-watcher` config format
+#
+# All names with underscores (_) can be alternatively spelled with dashes (-)
+# instead
+
+[options]
+# Required. Timeout for web requests to Github
+timeout = 60
+
+# Required. Interval (in seconds) at which Github repos will be checked. I
+# recommend setting this to a fairly high number since Github releases don't
+# really happen all that often, and we don't want to spam Github's servers with
+# pointless requests.
+interval = 1200
+
+# All repos are declared in a table with `[repo.<name>]`, the name is for your
+# own viewing and does not need to match the name of the actual repository.
+[repo.riscv-specs]
+# Required. Can alternatively be of the form:
+# repo = "riscv/riscv-isa-manual"
+repo = { user = "riscv", name = "riscv-isa-manual" }
+
+# Required. Where to place the downloaded assets.
+out_dir = "/home/repnop/specs"
+
+# Optional. `asset_filter` will restrict the downloaded assets to only ones with
+# the names listed here.
+asset_filter = ["riscv-spec.pdf", "riscv-privileged.pdf"]
+
+# Optional. `pre_download_command` is a command string that will be executed for
+# each previously downloaded Github asset, with `{}` being replaced by the
+# absolute path of the previously downloaded asset. Can be used, for example, to
+# back up the last set of downloaded assets by moving them to a different
+# directory.
+# 
+# Can alternatively be of the form:
+# pre_download_command = ["mv", "{}", "/home/repnop/old_specs"]
+pre_download_command = "mv {} /home/repnop/old_specs/"
+
+# Optional. `post_download_command` is a command string that will be executed for
+# each newly downloaded Github asset, with `{}` being replaced by the
+# absolute path of the newly downloaded asset. Can be used, for example, to
+# display a notification that the asset was downloaded.
+# 
+# Can alternatively be of the form:
+# post_download_command = ["notify-send", "New asset downloaded", "{}"]
+post_download_command = "notify-send 'New asset downloaded' {}"
+
+# Optional. `interval` allows you to override the default interval for release
+# watching for this specific repo.
+interval = 2400
