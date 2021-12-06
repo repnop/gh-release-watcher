@@ -61,7 +61,7 @@ impl RepoConfig {
             tokio::select! {
                 _ = timer.tick() => {
                     tracing::trace!("Checking release");
-                    let release: GithubReleaseResponse = client
+                    let mut release: GithubReleaseResponse = client
                         .get(&*api_url)
                         .header("User-Agent", concat!("gh-release-watcher v", stringify!(env!("CARGO_PKG_VERSION"))))
                         .timeout(std::time::Duration::from_secs(timeout))
@@ -85,8 +85,9 @@ impl RepoConfig {
                                 continue;
                             }
 
-                            
-                            Some(filename.split(',').map(|filename| path.join(filename).display().to_string()).collect::<Vec<_>>())
+                            // In case we didn't actually download anything last time but updated the ID
+                            let previous_files = filename.split(',').map(|filename| path.join(filename).display().to_string()).collect::<Vec<_>>();                            
+                            if previous_files.is_empty() { None } else { Some(previous_files) }
                         }
                         None => None,
                     };
@@ -115,17 +116,17 @@ impl RepoConfig {
                         }
                     }
 
+                    if let Some(filter) = &self.asset_filter {
+                        release.assets = release.assets.into_iter().filter(|asset| filter.contains(&asset.name)).collect();
+                    }
+
                     if let Some(previous_files) = previous_files {
                         for previous_file in previous_files {
                             tokio::fs::remove_file(previous_file).await.context("failed to remove previously downloaded file")?;
                         }
                     }
-                    let download_results = futures::stream::iter(&release.assets).filter(|asset| async {
-                        match &self.asset_filter {
-                            Some(filter) => filter.contains(&asset.name),
-                            None => true,
-                        }
-                    }).map::<anyhow::Result<_>, _>(Ok).and_then(|asset| {
+
+                    let download_results = futures::stream::iter(&release.assets).map::<anyhow::Result<_>, _>(Ok).and_then(|asset| {
                         let client = client.clone();
                         let path = path.join(&asset.name);
                         async move {
@@ -139,6 +140,8 @@ impl RepoConfig {
                     }).collect::<Vec<_>>().await;
 
                     if download_results.is_empty() {
+                        tracing::info!("No new assets to download for latest release");
+                        db.insert(&*name, format!("{}|", release.id).into_bytes()).context("failed to insert new database value")?;
                         continue;
                     }
 
@@ -152,14 +155,20 @@ impl RepoConfig {
 
                     let replace_indices: Vec<_> = pieces.as_mut().map(|pieces| pieces.iter_mut().enumerate().filter_map(|(i, s)| match s == "{}" { true => Some(i), false => None }).collect()).unwrap_or_default();
 
+                    let mut db_value = format!("{}|", release.id);
                     for result in download_results {
                         match result {
                             Err(e) => tracing::error!("Error downloading asset: {:#}", e),
-                            Ok(asset_name) => {
-                                tracing::info!("Successfully downloaded asset {}", asset_name.display());
+                            Ok(file_path) => {
+                                let file_name = file_path.file_name().and_then(std::ffi::OsStr::to_str).unwrap();
+                                
+                                db_value.push_str(file_name);
+                                db_value.push(',');
+
+                                tracing::info!("Successfully downloaded asset {}", file_name);
                                 if let Some(post_download_command) = &mut pieces {
                                     for index in &replace_indices {
-                                        post_download_command[*index] = asset_name.display().to_string();
+                                        post_download_command[*index] = file_path.display().to_string();
                                     }
             
                                     let mut command = tokio::process::Command::new(post_download_command.get(0).context("empty post-download command")?);
@@ -174,6 +183,10 @@ impl RepoConfig {
                             }
                         }
                     }
+
+                    // Pop the trailing comma
+                    db_value.pop();
+                    db.insert(&*name, db_value.into_bytes()).context("failed to insert new database value")?;
                 },
                 _ = shutdown.recv() => break,
             }
